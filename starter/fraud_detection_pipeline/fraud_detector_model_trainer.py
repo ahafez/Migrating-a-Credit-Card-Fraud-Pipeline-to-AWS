@@ -1,3 +1,4 @@
+# Glue Script (FraudDetectionTrainingJob)
 from awsglue.context import GlueContext
 from pyspark.sql import SparkSession, DataFrame
 from awsglue.dynamicframe import DynamicFrame
@@ -9,16 +10,16 @@ from pyspark.sql.types import DoubleType
 import sys
 from awsglue.utils import getResolvedOptions
 import logging
+import os
 
 # Setup logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Get Glue Job arguments
-args = getResolvedOptions(sys.argv, ['JOB_NAME', 'DATA_URL', 'MODEL_SAVE_PATH'])
-job_name = args['JOB_NAME']
-data_url = args['DATA_URL']
-model_save_path = args['MODEL_SAVE_PATH']
+# Set job parameters directly
+job_name = "FraudDetectionTrainingJob"
+data_url = "s3://fraud-detector-bucker-123/glue-data/credit_card_transaction_data_labeled.csv"
+model_save_path = "s3://fraud-detector-bucker-123/output/"
 
 glueContext = GlueContext(SparkSession.builder.appName(job_name).getOrCreate())
 spark = glueContext.spark_session
@@ -57,15 +58,16 @@ def transform_and_train(glueContext, data_url, model_save_path):
         model = pipeline.fit(df)
 
         # Save Model to S3 with Overwrite and logging.
-        model.write().mode("overwrite").save(model_save_path)
-        logger.info(f'Model trained and saved to {model_save_path}')
+        full_model_path = os.path.join(model_save_path, "fraud_detection_model_latest")
+        model.write().mode("overwrite").save(full_model_path)
+        logger.info(f'Model trained and saved to {full_model_path}')
 
         # Create output dynamic frame.
         dynamic_frame_output = DynamicFrame.fromDF(df, glueContext, "output_dynamic_frame")
         return dynamic_frame_output
 
     except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True) # Log the full exception
+        logger.error(f"Error: {e}", exc_info=True)
         return None
 
 # Execute the transformation and training
