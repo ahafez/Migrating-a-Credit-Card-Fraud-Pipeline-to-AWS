@@ -3,7 +3,11 @@ from pydantic import BaseModel
 from pyspark.sql import SparkSession
 from pyspark.ml import PipelineModel
 from pyspark.ml.linalg import Vectors
-
+import boto3
+import os
+import tempfile
+import logging
+import zipfile
 
 class InputData(BaseModel):
     features: list[float]
@@ -18,8 +22,7 @@ model = None
 @app.on_event('startup')
 async def load_model():
     global model
-    #TODO: Update to use the appopriate Cloud Storage location
-    model_path = 'model/fraud_detection_model_latest' 
+    model_path = 's3://fraud-detector-bucker-123/model/fraud_detection_model_latest' 
     #TODO: Add an intermediate storage location
 
     # Load the PySpark model
