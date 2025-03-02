@@ -1,49 +1,66 @@
-#TODO: Add the necessary Cloud SDK imports 
-import os
+import boto3
 import datetime
 import time
 from pyspark.sql import SparkSession
-from pyspark.ml import PipelineModel
-from fraud_detection_pipeline.fraud_detector_model_trainer import MyTransform
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+import sys
+import logging
+import os
 
-#TODO: Initiate the appopriate Cloud SDK Clients
-spark = SparkSession.builder.appName("CreditCardFraudDetection").getOrCreate()
+# Setup logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
-#TODO: Modify the function to work with the apporpriate Cloud Storage location
-def watch_directory_and_retrain(data_directory):
-    # TODO: modify the function initiate based on the event in the cloud storage account
+s3 = boto3.client('s3')
+bucket_name = 'fraud-detector-bucker-123'
+data_directory = 'glue-data/'  # Relative path within the S3 bucket
+archive_directory = 'archive/' # Relative path within the S3 bucket
+model_save_path = 'output/' # Relative path within the S3 bucket
+glue_job_name = 'FraudDetectionTrainingJob'
+
+# Initialize GlueContext
+glueContext = GlueContext(SparkSession.builder.appName("CreditCardFraudDetection").getOrCreate())
+spark = glueContext.spark_session
+
+def watch_directory_and_retrain():
     while True:
         try:
-            # Watch for new files in the specified directory
-            files = os.listdir(data_directory)
-            for file in files:
-                if file.endswith('.csv') and 'retrain' not in file:
-                    # TODO: modify the imports to call the service on the data in the cloud storage location
-                    new_data_path = os.path.join(data_directory, file)
-                    new_data = spark.read.csv(new_data_path, header=True, inferSchema=True)
-                    print(f"New data detected: {new_data_path}")
+            # List objects in the data directory
+            objects = s3.list_objects_v2(Bucket=bucket_name, Prefix=data_directory)
+            if 'Contents' in objects:
+                for obj in objects['Contents']:
+                    file_key = obj['Key']
+                    if file_key.endswith('.csv') and 'retrain' not in file_key and file_key != data_directory:
+                        logger.info(f"New data detected: s3://{bucket_name}/{file_key}")
 
-                    # TODO: modify the function to kick off the AWS Service Job
-                    MyTransform(new_data)
-                    
-                    # TODO: modify the function to move the processed file to an archive directory in the cloud storage location
-                    current_date = datetime.datetime.now().strftime("%Y%m%d")
-                    retrain_file_path = os.path.join(data_directory, f"{os.path.splitext(file)[0]}_retrain_{current_date}.csv")
-                    os.rename(new_data_path, retrain_file_path)
-                    print(f"Renamed processed file to: {retrain_file_path}")
+                        # Trigger Glue Job
+                        glue_client = boto3.client('glue')
+                        response = glue_client.start_job_run(
+                            JobName=glue_job_name,
+                            Arguments={
+                                '--DATA_URL': f's3://{bucket_name}/{file_key}',
+                                '--MODEL_SAVE_PATH': f's3://{bucket_name}/{model_save_path}'
+                            }
+                        )
+                        logger.info(f"Glue job {glue_job_name} started with run ID: {response['JobRunId']}")
 
-            
+                        # Move the processed file to the archive directory
+                        current_date = datetime.datetime.now().strftime("%Y%m%d")
+                        archive_file_key = f"{archive_directory}{os.path.splitext(os.path.basename(file_key))[0]}_retrain_{current_date}.csv"
+                        s3.copy_object(
+                            Bucket=bucket_name,
+                            CopySource={'Bucket': bucket_name, 'Key': file_key},
+                            Key=archive_file_key
+                        )
+                        s3.delete_object(Bucket=bucket_name, Key=file_key)
+                        logger.info(f"Moved processed file to: s3://{bucket_name}/{archive_file_key}")
+
+            time.sleep(60)  # Check every 60 seconds
+
         except Exception as e:
-            print(f"Error: {e}")
-        
-        time.sleep(10)  # Check the directory every 10 seconds`
-
-def main():
-    # Define the data directory to watch
-    data_directory = '/Users/jonathandyer/Documents/Dyer Innovation/data'
-    # Call the function to watch the directory and retrain
-    watch_directory_and_retrain(data_directory)
+            logger.error(f"Error: {e}", exc_info=True)
+            time.sleep(60)
 
 if __name__ == "__main__":
-    main()
-
+    watch_directory_and_retrain()
